@@ -1,0 +1,179 @@
+/* data "aws_efs_file_system" "maf" {
+  file_system_id = var.efs_volume_id
+} */
+
+
+###initial deployment####
+locals {
+  lb_tag_jaeger        = join(",", [for k, v in merge({ ComcastApplicationRole = "lb" }, var.standard_tags) : "${k}=${v}"])
+  jaeger_dns_subdomain = "jaeger${var.dns_env_name}"
+}
+data "kubernetes_ingress_v1" "jaeger" {
+  depends_on = [helm_release.maf_radar]
+
+  metadata {
+    name      = "jaeger-ingress"
+    namespace = local.observability_ns
+  }
+}
+/* resource "vinyldns_record_set" "jaeger_dns" {
+  zone_id      = var.vinyldns_zone_id
+  name         = local.jaeger_dns_subdomain
+  type         = "CNAME"
+  ttl          = 4000
+  record_cname = "${data.kubernetes_ingress_v1.jaeger-ingress.status.0.load_balancer.0.ingress.0.hostname}."
+} */
+resource "helm_release" "jaeger_ingress" {
+  name             = "jaeger-ingress"
+  chart            = "${path.module}/../charts/Jaeger"
+  lint             = true
+  namespace        = "observability"
+  create_namespace = true
+  values = [<<YAML
+lb:
+  name: "${var.app_name}-${var.region_initials}-${var.env}-jaeger"
+  sslCertArn: "${var.domain_cert_arn}"
+  dnsName: "${local.jaeger_dns_subdomain}.${var.domain}"
+  securityGroups: ["${var.public_rail_sg_id}", "${var.protected_rail_sg_id}"]
+  subnets: ${jsonencode(flatten(concat(values(var.public_rail_subnet_ids))))}
+  tags: ${local.lb_tag_jaeger}
+YAML
+  ]
+}
+resource "helm_release" "jaeger" {
+  name       = "jaeger"
+  repository = "https://jaegertracing.github.io/helm-charts"
+  chart      = "jaeger"
+  namespace  = local.observability_ns
+
+  values = [<<EOF
+agent:
+  enabled: false
+allInOne:
+  /* args:
+  - --es.server-urls=http://elasticsearch-master.${local.observability_ns}:9200 */
+  enabled: true
+  esJavaOpts: -Xms2g -Xmx2g
+  extraEnv:
+  - name: SPAN_STORAGE_TYPE
+    value: memory
+    /* value: elasticsearch */
+  nodeSelector:
+    ${local.core_node_selector_yaml}
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 256m
+      memory: 128Mi
+collector:
+  enabled: false
+/* elasticsearch:
+  esConfig:
+    elasticsearch.yml: |
+      node:
+        max_local_storage_nodes: 2
+  extraInitContainers:
+  - command:
+    - chown
+    - -R
+    - 1000: 1000
+    - /usr/share/elasticsearch/
+    image: busybox
+    name: file-permissions
+    securityContext:
+      privileged: true
+      runAsUser: 0
+    volumeMounts:
+    - mountPath: /usr/share/elasticsearch/data    
+      name: elasticsearch-master
+  nodeSelector:
+    ${local.core_node_selector_yaml}
+  replicas: 2
+  volumeClaimTemplate:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+    storageClassName: efs-sc
+esIndexCleaner:
+  enabled: false
+  nodeSelector:
+    ${local.core_node_selector_yaml} */
+hotrod:
+  enabled: false
+  extraArgs:
+  - --otel-exporter=otlp
+  extraEnv:
+  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+    value: http://otel-collector.${local.observability_ns}:4318
+provisionDataStore:
+  cassandra: false
+  elasticsearch: true
+query:
+  enabled: false
+storage:
+  type: elasticsearch
+EOF
+  ]
+  /* depends_on = [kubernetes_persistent_volume.pv] */
+}
+
+###initial deployment####
+
+
+/* resource "kubernetes_persistent_volume" "pv" {
+
+  count = length(var.pv_names)
+  metadata {
+    name = var.pv_names[count.index]
+  }
+
+  spec {
+    capacity {
+      storage = "1Gi"
+    }
+
+    volume_mode                      = "Filesystem"
+    access_modes                     = ["ReadWriteOnce"]
+    persistent_volume_reclaim_policy = "Retain"
+
+    storage_class_name = "efs-sc"
+
+    csi {
+      driver        = "efs.csi.aws.com"
+      volume_handle = aws_efs_file_system.maf.file_system_id
+    }
+  }
+
+  depends_on = [kubernetes_storage_class.efs_sc]
+
+} */
+
+/* resource "kubernetes_storage_class" "efs_sc" {
+  metadata {
+    name = "efs-sc"
+  }
+  provisioner = "efs.csi.aws.com"
+
+  depends_on = [aws_efs_access_point.efs_access_point]
+
+} */
+
+/* resource "aws_efs_access_point" "efs_access_point" {
+  file_system_id = aws_efs_file_system.maf.file_system_id
+  posix_user {
+    gid = var.id
+    uid = var.id
+  }
+  root_directory {
+    path = var.efs_mount_path
+    creation_info {
+      owner_uid   = var.id
+      owner_gid   = var.id
+      permissions = var.efs_file_permission
+    }
+  }
+} */

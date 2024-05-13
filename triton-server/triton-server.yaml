@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: kubeflow
+  name: triton-server-svc
+spec:
+  selector:
+    name : triton-server
+  type: NodePort
+  ports:
+  - name: triton-1
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: triton-metrics
+    port: 8002
+    targetPort: 8002
+    protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    namespace: kubeflow
+  name: triton-server
+  labels:
+    name : triton-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+        name: triton-server
+  template:
+    metadata:
+      annotations: 
+          sidecar.istio.io/inject: "false"
+      labels:
+        name: triton-server
+    spec:
+      nodeSelector:
+        nodeType: triton-server
+      containers:
+        - name: triton-server
+          env:
+          - name: DP_DISABLE_HEALTHCHECKS
+            value: "xids"
+          ports:
+          - containerPort: 8000
+            name: http-triton1
+          - containerPort: 8002
+            name: http-triton2
+          image: nvcr.io/nvidia/tritonserver:22.02-py3-min               #nvcr.io/nvidia/tritonserver:23.04-tf2-python-py3
+          resources:
+            requests:
+              memory: "5Gi"
+          args:
+          - "--gpus all"
+          - "--ipc=host"
+          - "--ulimit memlock=-1"
+          - "--ulimit stack=67108864"

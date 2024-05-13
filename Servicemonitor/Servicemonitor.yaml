@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    serviceMonitorSelector: prometheus
+  name: prometheus-servicemonitor 
+  namespace: servicemonitor-test.      
+spec:
+  endpoints:
+  - interval: 3s
+    targetPort: 8080
+    path: /metrics
+  namespaceSelector:               #namespaceSelector to specify the Kubernetes Namespace in which we wish to locate the Service,
+    matchNames:
+    - servicemonitor-test
+  selector:
+    matchLabels:
+      run: "php-apache"            #matchlabels for service to be selected by servicemonitor inside the namespaces mentioned above 

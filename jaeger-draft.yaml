@@ -1,0 +1,141 @@
+locals {
+  lb_tag_jaeger        = join(",", [for k, v in merge({ ComcastApplicationRole = "lb" }, var.standard_tags) : "${k}=${v}"])
+  jaeger_dns_subdomain = "jaeger${var.dns_env_name}"
+}
+
+data "aws_efs_file_system" "jaeger_efs" {
+  file_system_id = var.jaeger_efs_volume_id
+}
+
+data "kubernetes_ingress_v1" "jaeger" {
+  depends_on = [helm_release.maf_radar]
+
+  metadata {
+    name      = "jaeger-ingress"
+    namespace = local.observability_ns
+  }
+}
+resource "helm_release" "jaeger_ingress" {
+  name             = "jaeger-ingress"
+  chart            = "${path.module}/../charts/Jaeger"
+  lint             = true
+  namespace        = "observability"
+  create_namespace = true
+  values = [<<YAML
+lb:
+  name: "${var.app_name}-${var.region_initials}-${var.env}-jaeger"
+  sslCertArn: "${var.domain_cert_arn}"
+  dnsName: "${local.jaeger_dns_subdomain}.${var.domain}"
+  securityGroups: ["${var.public_rail_sg_id}", "${var.protected_rail_sg_id}"]
+  subnets: ${jsonencode(flatten(concat(values(var.public_rail_subnet_ids))))}
+  tags: ${local.lb_tag_jaeger}
+YAML
+  ]
+}
+resource "helm_release" "jaeger" {
+  name       = "jaeger"
+  repository = "https://jaegertracing.github.io/helm-charts"
+  chart      = "jaeger"
+  namespace  = local.observability_ns
+
+  values = [<<EOF
+agent:
+  enabled: false
+query:
+  enabled: false
+collector:
+  enabled: false
+provisionDataStore:
+  cassandra: false
+  elasticsearch: true
+storage:
+  type: elasticsearch
+allInOne:
+  enabled: true
+  extraEnv: 
+    - name: SPAN_STORAGE_TYPE
+      value: elasticsearch
+  args: 
+    - --es.server-urls=http://elasticsearch-master:9200
+  nodeSelector:
+    nodeType: core
+  esJavaOpts: "-Xms2g -Xmx2g"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 256m
+      memory: 128Mi
+elasticsearch:
+  extraInitContainers:
+  - command:
+    - chown
+    - -R
+    - 1000:1000
+    - /usr/share/elasticsearch/
+    image: busybox
+    name: file-permissions
+    securityContext:
+      privileged: true
+      runAsUser: 0
+    volumeMounts:
+    - mountPath: /usr/share/elasticsearch/data
+      name: elasticsearch-master
+  nodeSelector:
+    nodeType: core
+  esConfig: 
+    elasticsearch.yml: |
+      node:
+        max_local_storage_nodes: 2
+  replicas: 2
+  volumeClaimTemplate:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+    storageClassName: efs-sc
+esIndexCleaner:
+  enabled: false
+  numberOfDays: 14
+  nodeSelector:
+    nodeType: core
+hotrod:
+  enabled: false
+  extraArgs:
+    - --otel-exporter=otlp
+  extraEnv:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://otel-collector:4318
+EOF
+  ]
+}
+
+resource "kubernetes_persistent_volume" "pv" {
+
+  count = length(var.pv_names)
+  metadata {
+    name = var.pv_names[count.index]
+  }
+
+  spec {
+    capacity {
+      storage = "500Mi"
+    }
+
+    volume_mode                      = "Filesystem"
+    access_modes                     = ["ReadWriteOnce"]
+    persistent_volume_reclaim_policy = "Retain"
+
+    storage_class_name = "efs-sc"
+
+    csi {
+      driver        = "efs.csi.aws.com"
+      volume_handle = aws_efs_file_system.maf.file_system_id
+    }
+  }
+
+  /* depends_on = [kubernetes_storage_class.efs_sc] */
+
+}

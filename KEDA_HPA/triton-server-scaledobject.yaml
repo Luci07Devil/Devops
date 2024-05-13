@@ -1,0 +1,23 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: triton-server-scale
+  namespace: maf-analysis
+  labels:
+    deploymentName: triton-server-scale
+spec:
+  scaleTargetRef:
+    kind: deployment
+    name: triton-server
+  pollingInterval: 5         # the interval to check each trigger on.
+  cooldownPeriod:  300       # The period to wait after the last trigger reported active before scaling the resource back to 0
+  # idleReplicaCount: 0        # replica count if no requests received 
+  minReplicaCount: 3         
+  maxReplicaCount: 6
+  triggers:
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-kube-prometheus-prometheus.observability:9090
+      metricName: triton_server_request_queue_time
+      threshold: '9700000'               #'11511283' 
+      query: sum(rate(nv_inference_queue_duration_us{instance="service-triton-server.maf-analysis:8002", job="triton-server"}[1m]))

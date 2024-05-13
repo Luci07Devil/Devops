@@ -1,0 +1,55 @@
+alertmanager:
+  enabled: true
+grafana:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelector:
+      matchLabels:
+        release : prometheus
+    additionalScrapeConfigs:
+    - job_name: triton
+      static_configs:
+      - targets:
+        - service-triton-server.maf-analysis:8000
+        - service-triton-server.maf-analysis:8002
+    - job_name: traefik
+      static_configs:
+      - targets:
+        - traefik-prometheus:9100
+    - job_name: istiod
+      kubernetes_sd_configs:
+      - namespaces:
+          names:
+          - istio-system
+        role: endpoints
+      relabel_configs:
+      - action: keep
+        regex: istiod;http-monitoring
+        source_labels:
+        - __meta_kubernetes_service_name
+        - __meta_kubernetes_endpoint_port_name
+    - job_name: envoy-stats
+      kubernetes_sd_configs:
+      - role: pod
+      metrics_path: /stats/prometheus
+      relabel_configs:
+      - action: keep
+        regex: .*-envoy-prom
+        source_labels:
+        - __meta_kubernetes_pod_container_port_name
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: yellowstone-core
+    remoteWrite:
+    - queueConfig:
+        capacity: 2500
+        maxSamplesPerSend: 1000
+        minShards: 200
+      sendExemplars: true
+      sigv4:
+        region: us-east-1
+      url: https://aps-workspaces.us-east-1.amazonaws.com/workspaces/ws-99352b06-385a-4eb6-80e1-3e0a862b0833/api/v1/remote_write
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::371354297407:role/CustomerManaged_test_AmazonManagedPrometheusRole
+    name: svc-mafaas-cvp-demos-user

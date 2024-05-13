@@ -1,0 +1,7 @@
+KEDA autoscaling based on incoming requests for triton inference server 
+nodeselector
+flux gitops
+kubecost 
+servicemonitor 
+istio sidecar container 
+
